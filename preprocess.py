@@ -1,3 +1,6 @@
+"""
+Preprocessing code, possible preprocessing that could be applied on data
+"""
 import numpy as np
 
 def sub_sample(train_dat, test_dat, dev_dat):

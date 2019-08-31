@@ -1,3 +1,9 @@
+"""
+	Main file Containing the code for all models. We use a seq2seq autoencoder.
+	The autoencoder has it's own class with functions for the model forward prop and also to train it.
+"""
+
+
 
 from tensorboard_logger import Logger
 import torch
@@ -62,10 +68,10 @@ class Decoder(nn.Module):
 	def forward(self, input_dat, hidden=None):
 		"""
 			decoder forward pass
-			returns 3 things:
+			returns 2 things:
 			1 output_dat: output of forward to be used as next input.
 			2 hidden state of first layers(lstm1): these layers should perform bulk of func approx
-			3 hidden_state of reduction layer(lstm2): reduction LSTM layer. Ensures output has same dims as input
+			XX---3 hidden_state of reduction layer(lstm2): reduction LSTM layer. Ensures output has same dims as input---XX
 		"""
 		output_dat, hidden_state = self.lstm1(input_dat, hidden)
 		#output_loss_dat, _ = nn.utils.rnn.pad_packed_sequence(output_dat)#, total_lengths)
@@ -97,12 +103,21 @@ class Seq2SeqAutoencoder(nn.Module):
 		self.end_mfcc_val = 6.0
 
 	def train_step(self, input_dat, lengths, teacher_forcing=0.6):
-		
+		"""
+			Functions encapsulating the computations for exactly one training iteration.
+			:param input_dat: input data as a numpy array of shape (SEQ_LEN, batch, feature_len)
+			:param lengths: list containing the number of MFCC vectors extracted for each audio file.(needed for compute optim)
+			:param teacher_forcing: probability of applying teacher forcing. The decoder would use the correct MFCC vector of prev
+									timestep instead of the one produced by the decoder with probability of "teacher_forcing"
+			:returns:
+				loss: amount of MSE loss computed in current iteration(scalar)
+		"""
+
 		self.encoder_optimizer.zero_grad()
 		self.decoder_optimizer.zero_grad()
 
-		#for sample in input_dat:
 
+		# code for denoising autoencoder..
 		# noise_mask = torch.tensor(np.random.random(input_dat.shape))
 		# noised_input = input_dat.clone().detach()
 		# noised_input[noise_mask<self.noise_prob] = 0.0
@@ -113,9 +128,6 @@ class Seq2SeqAutoencoder(nn.Module):
 		start_mfcc = torch.ones( (1, input_dat.shape[1], input_dat.shape[2]) , device=device) * self.start_mfcc_val
 		prev_output= None
 
-		# indices of samples whose last timestep was computed in previous iters
-		# completed_sample_idx = [] #[idx for idx in range(len(lengths)) if lengths[idx]<timestep]
-
 		for timestep, pred_target in enumerate(input_dat):
 			if timestep == 0:
 				# create a mfcc tensor filled with -1 to indicate start of mfcc samples. kind of like <SOS> tags in NLP.
@@ -125,7 +137,7 @@ class Seq2SeqAutoencoder(nn.Module):
 				# if teacher forcing ignore previous output.
 				if np.random.random() < teacher_forcing:
 					correct_input = input_dat[timestep-1].view(1, input_dat.shape[1], input_dat.shape[2])
-					#print(correct_input.shape)
+
 					output, decoder_hidden_state = \
 													self.decoder.forward(correct_input.float(), \
 																hidden=decoder_hidden_state)
@@ -157,6 +169,7 @@ class Seq2SeqAutoencoder(nn.Module):
 		# min_dim_loss = torch.min(loss, dim=2, keepdim=True)
 		# print("min dim loss: ", min_dim_loss)
 		# loss = torch.mean(loss)
+
 		print("consol loss", loss)
 		loss.backward()
 
@@ -171,6 +184,15 @@ class Seq2SeqAutoencoder(nn.Module):
 		return loss.detach().cpu().numpy()
 
 	def train(self, dataloader, dev_dataloader, epochs, epochs_per_save, model_save_path, logger):
+		"""
+			trains the model
+			:param dataloader: pytorch dataloader for training data.
+			:param dev_dataloader: pytorch dataloader for evaluation data
+			:param epochs: number of epochs to train
+			:param epochs_per_save: save every epochs_per_save epochs.
+			:param model_save_path: model parameters save location
+			:param logger: tensorboard logger object
+		"""
 		device = torch.device(DEVICE_ID if torch.cuda.is_available() else "cpu")
 		const_lr =False
 		losses = []
@@ -220,7 +242,7 @@ class Seq2SeqAutoencoder(nn.Module):
 			# 	print("model diverging! stopping training..")
 			# 	break
 
-			# reduce lr on plateau
+			# learning rate schedule
 			if len(eval_losses) > 2 and eval_losses[len(eval_losses)-2] - eval_losses[len(eval_losses)-1] < 0.01:
 				print("eval loss not reduced!")
 				patience -= 1
@@ -242,16 +264,28 @@ class Seq2SeqAutoencoder(nn.Module):
 		return losses
 
 	def resume_train(self, checkpoint, dataloader, dev_dataloader, epochs, epochs_per_save, model_save_path, logger, init_lr=None):
+		"""
+			resumes training from a saved state
+			:param checkpoin: model + optimizer save state
+			:param dataloader: pytorch dataloader for training data.
+			:param dev_dataloader: pytorch dataloader for evaluation data
+			:param epochs: number of additional epochs to train for
+			:param epochs_per_save: save every epochs_per_save epochs.
+			:param model_save_path: model parameters save location
+			:param logger: tensorboard logger object
+			:param init_lr: initial learning rate to resume training 
+		"""
 		device = torch.device(DEVICE_ID if torch.cuda.is_available() else "cpu")
 		
 		self.load_state_dict(checkpoint["model_state_dict"])
 		#self.encoder_optimizer.load_state_dict(checkpoint["encoder_optimizer_state_dict"])
 		#self.decoder_optimizer.load_state_dict(checkpoint["decoder_optimizer_state_dict"])
 		curr_epoch = checkpoint["current_epoch"]
-		for grp in self.encoder_optimizer.param_groups:
-			grp["lr"] = init_lr
-		for grp in self.decoder_optimizer.param_groups:
-			grp["lr"] /= init_lr
+		if init_lr is not None:
+			for grp in self.encoder_optimizer.param_groups:
+				grp["lr"] = init_lr
+			for grp in self.decoder_optimizer.param_groups:
+				grp["lr"] = init_lr
 
 
 		print("model trained for:" + str(curr_epoch) + "epochs")
@@ -292,7 +326,11 @@ class Seq2SeqAutoencoder(nn.Module):
 		return losses
 
 	def eval_step(self, input_dat, lengths):
-		
+		"""
+			evaluation step to compute evaluation loss on mini-batch
+			:param input_dat: input data as a numpy array of shape (SEQ_LEN, batch, feature_len)
+			:param lengths: list containing the number of MFCC vectors extracted for each audio file.(needed for compute optim)
+		"""
 		noise_mask = torch.tensor(np.random.random(input_dat.shape))
 		noised_input = input_dat.clone().detach()
 		noised_input[noise_mask<self.noise_prob] = 0.0
@@ -334,6 +372,14 @@ class Seq2SeqAutoencoder(nn.Module):
 
 
 	def evaluate(self, dev_dataloader):
+		"""
+			Called after each training iter to compute loss on evaluation dataset.
+				:param dev_dataloader: pytorch dataloader for eval dataset
+
+				:returns:
+					loss: evaluation data set loss (scalar)
+			
+		"""
 		device = torch.device(DEVICE_ID if torch.cuda.is_available() else "cpu")
 		self.to(device)
 		losses = 0
@@ -353,7 +399,9 @@ class Seq2SeqAutoencoder(nn.Module):
 		return losses / num_iters
 
 	def embed(self, input_dat, lengths):
-		
+		"""
+			Computes Audio2Vec if model already trained.
+		"""
 		#self.encoder.forward(input_dat, lengths)
 		hidden_state=None
 		#for sample in input_dat:

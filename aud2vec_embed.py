@@ -1,3 +1,7 @@
+"""
+	code to generate audio embeddings for all parts of a dataset
+"""
+
 from aud2vec import Seq2SeqAutoencoder
 from audio_dataset import AudioMFCCDataset
 
